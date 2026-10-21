@@ -49,24 +49,27 @@ $$
 
 ## 2. The Three Physical Pillars
 
-1. **Gravitational Pull Toward Retrieved Real Tokens** ($T^*$):  
-   Instead of computing an $O(N^2)$ all-pairs attention matrix or pulling tokens toward synthetic centroids, each subspace generates a probe query $\mathbf{q}_k$ from the collective field average, identifies the **best-matching real token** $T^*_k$, and endows it with learnable mass $M_k$. Every token $\mathbf{x}_i$ is pulled toward $T^*_k$ via an inverse-square force law in $O(N)$ linear time:
+### 2.1 Gravitational Pull Toward Retrieved Real Tokens ($T^\ast$)
 
-   $$
-   \mathbf{F}_{\text{grav}, i, k} = \frac{M_k}{d_{i, k}^2} \left(\mathbf{t}^*_k - \mathbf{x}_{i, k}\right), \quad d_{i, k}^2 = 2 - 2\langle \mathbf{x}_{i, k}, \mathbf{t}^*_k \rangle + \epsilon
-   $$
+Instead of computing an $O(N^2)$ all-pairs attention matrix or pulling tokens toward synthetic centroids, each subspace generates a probe query $\mathbf{q}_k$ from the collective field average, identifies the best-matching real token $T_k^\ast$, and endows it with learnable mass $M_k$. Every token $\mathbf{x}_i$ is pulled toward $T_k^\ast$ via an inverse-square force law in $O(N)$ linear time:
 
-2. **Hooke's Law Elastic Anchoring** ($\mathbf{u}_i$):  
-   Pure gravitational attraction causes total collapse into a single point/singularity (over-smoothing). To preserve identity and topology, every token is tethered to its initial coordinate $\mathbf{u}_i$ (patch embedding + position) via a virtual spring exerting a restoring force:
+$$
+\mathbf{F}_{\text{grav}, i, k} = \frac{M_k}{d_{i, k}^2} \left(\mathbf{t}_k^\ast - \mathbf{x}_{i, k}\right), \quad d_{i, k}^2 = 2 - 2\langle \mathbf{x}_{i, k}, \mathbf{t}_k^\ast \rangle + \epsilon
+$$
 
-   $$
-   \mathbf{F}_{\text{spring}, i, k} = \kappa_{i, k} (\mathbf{u}_{i, k} - \mathbf{x}_{i, k})
-   $$
+### 2.2 Hooke's Law Elastic Anchoring ($\mathbf{u}_i$)
 
-   Each token predicts its own dynamic spring constant $\kappa_{i, k} \in (0, 1)$, allowing structural/foreground regions to stay rigid ($\kappa \to 1$) while contextual/background regions remain fluid ($\kappa \to 0$).
+Pure gravitational attraction causes total collapse into a single point/singularity (over-smoothing). To preserve identity and topology, every token is tethered to its initial coordinate $\mathbf{u}_i$ (patch embedding + position) via a virtual spring exerting a restoring force:
 
-3. **Orthogonal Subspace Multi-Body Dynamics:**  
-   When $K$ attractors pull inside the *same* vector space, opposing force vectors collide and cancel each other out (**destructive interference**). By decomposing the $D$-dimensional space into $K$ mutually orthogonal hyperspheres $\mathbb{S}^{d_k-1}$, $K$ independent gravitational bodies pull tokens along perpendicular degrees of freedom with **zero vector cancellation**.
+$$
+\mathbf{F}_{\text{spring}, i, k} = \kappa_{i, k} (\mathbf{u}_{i, k} - \mathbf{x}_{i, k})
+$$
+
+Each token predicts its own dynamic spring constant $\kappa_{i, k} \in (0, 1)$, allowing structural/foreground regions to stay rigid ($\kappa \to 1$) while contextual/background regions remain fluid ($\kappa \to 0$).
+
+### 2.3 Orthogonal Subspace Multi-Body Dynamics
+
+When $K$ attractors pull inside the *same* vector space, opposing force vectors collide and cancel each other out (**destructive interference**). By decomposing the $D$-dimensional space into $K$ mutually orthogonal hyperspheres $\mathbb{S}^{d_k-1}$, $K$ independent gravitational bodies pull tokens along perpendicular degrees of freedom with **zero vector cancellation**.
 
 ---
 
@@ -131,7 +134,7 @@ Without any segmentation supervision, structural foreground tokens automatically
 ![Emergent Object Shadows](results/emergent_object_shadows.png)
 
 ### Subspace Division of Labor & Dual Push-Pull Masks
-Inspecting the 4 orthogonal spheres reveals functional division of labor: Subspace 4's attractor ($T^*_4$, yellow dot) consistently locks onto the primary object center, while Subspaces 1–3 anchor to peripheral boundaries. In addition, Subspaces 1 and 4 exhibit complementary push-pull elasticity masks (center-surround antagonism):
+Inspecting the 4 orthogonal spheres reveals functional division of labor: Subspace 4's attractor ($T_4^\ast$, yellow dot) consistently locks onto the primary object center, while Subspaces 1–3 anchor to peripheral boundaries. In addition, Subspaces 1 and 4 exhibit complementary push-pull elasticity masks (center-surround antagonism):
 
 ![Subspace Elasticity Partitioning](results/subspace_elasticity_partitioning.png)
 
