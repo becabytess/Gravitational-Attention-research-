@@ -75,18 +75,18 @@ When $K$ attractors pull inside the *same* vector space, opposing force vectors 
 
 ## 3. Current Architecture
 
-The architecture uses **one single weight-tied recurrent module** (`OrthogonalVisionRound`) unrolled iteratively for $R$ rounds ($R=6$):
+The architecture uses **one single weight-tied recurrent module** (`OrthogonalVisionRound` / `LinearCausalGravitationalRound`) unrolled iteratively for $R$ rounds ($R=6$):
 
 ```mermaid
 flowchart TD
-    Img["Input Image (32x32)"] --> Stem["Conv Stem (Patchify to N=256, D=192)"]
+    In["Input Sequence / Image Tokens"] --> Stem["Embedding / Patch Stem (D=192)"]
     Stem --> Pos["+ Positional Encoding"]
     Pos --> Init["Project & Normalize onto K=4 Spheres: S^47"]
     Init --> U["Anchor u_i and Initial State x^(0) = u_i"]
     U --> Kappa["Per-Token, Per-Subspace Elasticity kappa_{i,k}"]
     
     subgraph RecurrentLoop ["Weight-Tied Gravitational Round (Looped R = 6 Times)"]
-        CoM["1. Global Center of Mass (Subspace Mean)"]
+        CoM["1. Center of Mass (Global Mean or Causal Prefix Scan)"]
         Query["2. Subspace Probe Queries q_k"]
         Attract["3. Retrieve Real Attractor T*_k per Subspace"]
         Gravity["4. Inverse-Square Gravitational Pull: F_grav = (M / d^2) * (T* - x)"]
@@ -100,13 +100,13 @@ flowchart TD
     
     U --> RecurrentLoop
     Kappa --> RecurrentLoop
-    RecurrentLoop --> Readout["Dual Readout: Cat[Center-of-Mass, Peak-Activation]"]
-    Readout --> Head["LayerNorm + Linear Classifier (100 Classes)"]
+    RecurrentLoop --> Readout["Dual Readout: Cat[Tokens, Center-of-Mass]"]
+    Readout --> Head["LayerNorm + Task Head (Classifier / LM Head)"]
 ```
 
 ---
 
-## 4. Key Results & Physics Ablations (CIFAR-100)
+## 4. Vision Benchmarks & Physics Ablations (CIFAR-100)
 
 Trained on CIFAR-100 ($N=256$ patches, $D=192$, $K=4$ orthogonal $48$-D spheres, 6 shared rounds) for 40 epochs:
 
@@ -114,7 +114,7 @@ Trained on CIFAR-100 ($N=256$ patches, $D=192$, $K=4$ orthogonal $48$-D spheres,
 * **Top-1 Accuracy:** **59.22%**
 * **Top-5 Accuracy:** **85.32%**
 
-### Physics Ablations (Epoch 40, Zero Retraining)
+### Physics Ablations (CIFAR-100 Epoch 40, Zero Retraining)
 Evaluating the model while isolating each physical force demonstrates that the network organizes its core computation around the physical field:
 
 | Configuration | Top-1 Accuracy | Top-5 Accuracy | Delta vs. Full | Physical Interpretation |
@@ -140,29 +140,110 @@ Inspecting the 4 orthogonal spheres reveals functional division of labor: Subspa
 
 ---
 
-## 6. Repository Structure
+## 6. Strictly $O(T)$ Linear Causal Language Modeling (Tiny Shakespeare)
+
+Standard causal self-attention scales quadratically as $O(T^2)$ in time and memory due to the lower-triangular causal attention matrix. 
+
+Gravitational Attention achieves **strictly $O(T)$ linear-time autoregressive modeling with ZERO $T \times T$ matrices** via exact exponential cancellation.
+
+### 6.1 Exact Exponential Cancellation Derivation
+In the past light-cone ($j < t$), query-token match scores decay with learned temporal horizon $\gamma_k$:
+
+$$
+\text{Score}(t, j) = s_j - \gamma_k (t - j) = s_j - \gamma_k t + \gamma_k j
+$$
+
+When evaluating normalized softmax weights over past tokens:
+
+$$
+w_{t, j} = \frac{\exp\left(s_j - \gamma_k(t - j)\right)}{\sum_{j < t} \exp\left(s_j - \gamma_k(t - j)\right)} = \frac{\exp(-\gamma_k t) \cdot \exp(s_j + \gamma_k j)}{\exp(-\gamma_k t) \cdot \sum_{j < t} \exp(s_j + \gamma_k j)} = \frac{\exp(s_j + \gamma_k j)}{\sum_{j < t} \exp(s_j + \gamma_k j)}
+$$
+
+Because the term $\exp(-\gamma_k t)$ is strictly independent of index $j$, **it factors out of both the numerator and denominator and cancels completely**. 
+
+Consequently, the retrieved past attractor $\mathbf{t}_{t, k}^\ast$ reduces to a cumulative prefix sum (`cumsum`):
+
+$$
+\mathbf{t}_{t, k}^\ast = \text{Normalize}\left(\frac{\sum_{j < t} \exp(s_j + \gamma_k j) \mathbf{x}_{j, k}}{\sum_{j < t} \exp(s_j + \gamma_k j)}\right)
+$$
+
+This operates in **strictly $O(T)$ time and memory**. No $T \times T$ attention matrix is ever materialized.
+
+### 6.2 Tiny Shakespeare Benchmark Results
+Trained on Tiny Shakespeare (1.11M characters, $T=128$, $D=192$, $K=4$ orthogonal $48$-D spheres, 6 shared rounds, 10 epochs):
+
+* **Parameters:** **249,105**
+* **Causality Verification:** Maximum future-to-past information leak ($t < 64$ from future tokens $t \ge 64$) = **$0.00\text{e}+00$**
+* **Validation Loss:** **1.583**
+* **Next-Character Accuracy:** **53.60%**
+
+#### Physics Ablation (Tiny Shakespeare Epoch 10)
+
+| Configuration | Val Loss | Next-Char Accuracy | Delta vs. Full |
+| :--- | :---: | :---: | :--- |
+| **Full $O(T)$ Orthogonal Model** | **1.583** | **53.60%** | — |
+| **Constant Spring ($\kappa = 0.5$)** | **2.335** | **33.38%** | **-20.22%** |
+| **Gravity Disabled ($\eta = 0$)** | **3.979** | **16.47%** | **-37.13%** |
+| **Springs Disabled ($\kappa = 0$)** | **7.534** | **4.32%** | **-49.29%** (Catastrophic collapse) |
+
+### 6.3 Emergent Linguistic Dynamics: Phonetic Backbones & Word Horizons
+Analyzing per-character elasticity $\kappa_{t, k}$ and spacetime lookback distance $(t - j)$ across Hamlet's *"To be, or not to be, that is the question:"* reveals functional hierarchy across the 4 orthogonal spheres:
+
+![Causal LM Shakespeare Analysis](results/causal_lm_shakespeare_analysis.png)
+
+1. **Subspaces 3 & 4 ($\gamma = 4.23, 4.29$ — Markovian Phonetic Backbone):** Under steep decay, lookback distance is strictly locked at **1** (lookback of $t-1$) across every character, providing an unbroken Markovian chain for spelling.
+2. **Subspace 2 ($\gamma = 2.86$ — Digram Buffer):** Alternates between lookback 1 and 2 characters back, capturing immediate phonemes and vowel-consonant transitions.
+3. **Subspace 1 ($\gamma = 2.08$ — Multi-Character Morpheme Horizon):** Lowest temporal decay rate. Lookback expands to distances 2 and 3, tracking word progressions (`To␣` $\to$ 1, 2, 3; `or␣` $\to$ 1, 2, 3).
+4. **Punctuation & Boundary Pillars:** In Subspace 1, syntactic punctuation (`,` and `:`) and clause starts receive peak spring stiffness ($\kappa \to 1.0$), serving as fixed grammatical anchors.
+
+### 6.4 Sample Generation
+```text
+ROMEO:
+Wht, they no con?
+
+CAPlacior and?
+
+HER:
+Giard one. Is welld they should be hears
+Which I should not content of the man hers?
+And, be hither encounted to the touch'd mine.
+
+First ServinLeCUS:
+A beast what you can penter n
+```
+
+---
+
+## 7. Repository Structure
 
 ```
 ├── experiments/
-│   └── cifar100_orthogonal_vision.py        # Standalone CIFAR-100 training, ablation & visualizer
+│   ├── cifar100_orthogonal_vision.py        # 2D Vision: CIFAR-100 training, ablation & visualizer
+│   └── shakespeare_causal_lm.py             # 1D Causal LM: Strictly O(T) Shakespeare training & visualizer
 ├── results/
-│   ├── emergent_object_shadows.png           # Unsupervised figure-ground segmentation heatmaps
-│   └── subspace_elasticity_partitioning.png   # 4-subspace attractor & elasticity analysis
+│   ├── emergent_object_shadows.png           # 2D Vision: Unsupervised figure-ground segmentation heatmaps
+│   ├── subspace_elasticity_partitioning.png   # 2D Vision: 4-subspace attractor & elasticity analysis
+│   └── causal_lm_shakespeare_analysis.png    # 1D Causal LM: Lookback distance & elasticity analysis
 ├── README.md
 └── .gitignore
 ```
 
 ---
 
-## 7. Quick Start
+## 8. Quick Start
 
 ### Installation
 ```bash
 pip install torch torchvision datasets matplotlib numpy
 ```
 
-### Reproduce CIFAR-100 (40 Epochs)
+### Reproduce Vision Benchmark (CIFAR-100, 40 Epochs)
 ```bash
 python experiments/cifar100_orthogonal_vision.py
 ```
-This script loads the dataset directly into GPU VRAM, trains the 351k-parameter model for 40 epochs (~2.5s/epoch on modern GPUs), executes the physics ablation suite, and saves the diagnostic heatmaps to `results/`.
+
+### Reproduce Causal LM Benchmark (Tiny Shakespeare, 10 Epochs)
+```bash
+python experiments/shakespeare_causal_lm.py
+```
+Both scripts load datasets directly into GPU VRAM, verify mathematical physics invariants (causality checks, geodesic normalization), execute full physics ablation suites, and save high-resolution figures to `results/`.
