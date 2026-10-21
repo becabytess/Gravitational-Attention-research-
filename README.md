@@ -10,16 +10,25 @@
 ## 1. The Core Idea: Field Dynamics on Hyperspheres
 
 Traditional neural networks (Transformers, MLPs, ResNets) rely on unconstrained affine transformations at every depth:
-$$\mathbf{x}^{(l+1)} = \sigma(\mathbf{W}^{(l)} \mathbf{x}^{(l)} + \mathbf{b}^{(l)})$$
+
+$$
+\mathbf{x}^{(l+1)} = \sigma\left(\mathbf{W}^{(l)} \mathbf{x}^{(l)} + \mathbf{b}^{(l)}\right)
+$$
+
 By layer $L$, the geometric coordinate manifold has been continuously stretched, warped, and destroyed.
 
 **Gravitational Attention Networks** propose a fundamental paradigm shift:
 Tokens are treated as **discrete physical particles residing on a permanent compact manifold**—specifically, a Cartesian product of $K$ orthogonal unit hyperspheres:
-$$\mathcal{M} = \mathbb{S}^{d_1-1} \times \mathbb{S}^{d_2-1} \times \dots \times \mathbb{S}^{d_K-1}, \quad \text{where } d_k = \frac{D}{K}$$
+
+$$
+\mathcal{M} = \mathbb{S}^{d_1-1} \times \mathbb{S}^{d_2-1} \times \dots \times \mathbb{S}^{d_K-1}, \quad \text{where } d_k = \frac{D}{K}
+$$
 
 Tokens never leave these spherical surfaces. Instead of layer-wise transformation, tokens **migrate** across the surface of the hyperspheres governed by classical equations of motion until they reach dynamic equilibrium:
 
-$$\Delta \mathbf{x}_i \propto \mathbf{F}_{\text{net}, i} = \eta \mathbf{F}_{\text{gravity}, i} + \mathbf{F}_{\text{Hooke}, i}$$
+$$
+\Delta \mathbf{x}_i \propto \mathbf{F}_{\text{net}, i} = \eta \mathbf{F}_{\text{gravity}, i} + \mathbf{F}_{\text{Hooke}, i}
+$$
 
 ```
                 +-------------------------------------------+
@@ -40,16 +49,23 @@ $$\Delta \mathbf{x}_i \propto \mathbf{F}_{\text{net}, i} = \eta \mathbf{F}_{\tex
 
 ## 2. The Three Physical Pillars
 
-1. **Gravitational Pull Toward Retrieved Real Tokens ($T^*$):**
-   Instead of computing an $O(N^2)$ all-pairs attention matrix or pulling tokens toward synthetic centroids, each subspace generates a probe query $\mathbf{q}_k$ from the collective field average, identifies the **best-matching real token $T^*_k$**, and endows it with learnable mass $M_k$. Every token $\mathbf{x}_i$ is pulled toward $T^*_k$ via an inverse-square force law in $O(N)$ linear time:
-   $$\mathbf{F}_{\text{grav}, i, k} = \frac{M_k}{d_{i, k}^2} \left(\mathbf{t}^*_k - \mathbf{x}_{i, k}\right), \quad d_{i, k}^2 = 2 - 2\langle \mathbf{x}_{i, k}, \mathbf{t}^*_k \rangle + \epsilon$$
+1. **Gravitational Pull Toward Retrieved Real Tokens** ($T^*$):  
+   Instead of computing an $O(N^2)$ all-pairs attention matrix or pulling tokens toward synthetic centroids, each subspace generates a probe query $\mathbf{q}_k$ from the collective field average, identifies the **best-matching real token** $T^*_k$, and endows it with learnable mass $M_k$. Every token $\mathbf{x}_i$ is pulled toward $T^*_k$ via an inverse-square force law in $O(N)$ linear time:
 
-2. **Hooke's Law Elastic Anchoring ($\mathbf{u}_i$):**
+   $$
+   \mathbf{F}_{\text{grav}, i, k} = \frac{M_k}{d_{i, k}^2} \left(\mathbf{t}^*_k - \mathbf{x}_{i, k}\right), \quad d_{i, k}^2 = 2 - 2\langle \mathbf{x}_{i, k}, \mathbf{t}^*_k \rangle + \epsilon
+   $$
+
+2. **Hooke's Law Elastic Anchoring** ($\mathbf{u}_i$):  
    Pure gravitational attraction causes total collapse into a single point/singularity (over-smoothing). To preserve identity and topology, every token is tethered to its initial coordinate $\mathbf{u}_i$ (patch embedding + position) via a virtual spring exerting a restoring force:
-   $$\mathbf{F}_{\text{spring}, i, k} = \kappa_{i, k} (\mathbf{u}_{i, k} - \mathbf{x}_{i, k})$$
+
+   $$
+   \mathbf{F}_{\text{spring}, i, k} = \kappa_{i, k} (\mathbf{u}_{i, k} - \mathbf{x}_{i, k})
+   $$
+
    Each token predicts its own dynamic spring constant $\kappa_{i, k} \in (0, 1)$, allowing structural/foreground regions to stay rigid ($\kappa \to 1$) while contextual/background regions remain fluid ($\kappa \to 0$).
 
-3. **Orthogonal Subspace Multi-Body Dynamics:**
+3. **Orthogonal Subspace Multi-Body Dynamics:**  
    When $K$ attractors pull inside the *same* vector space, opposing force vectors collide and cancel each other out (**destructive interference**). By decomposing the $D$-dimensional space into $K$ mutually orthogonal hyperspheres $\mathbb{S}^{d_k-1}$, $K$ independent gravitational bodies pull tokens along perpendicular degrees of freedom with **zero vector cancellation**.
 
 ---
@@ -125,10 +141,10 @@ Inspecting the 4 orthogonal spheres reveals functional division of labor: Subspa
 
 ```
 ├── experiments/
-│   └── cifar100_orthogonal_vision.py  # Standalone CIFAR-100 training, ablation & visualizer
+│   └── cifar100_orthogonal_vision.py        # Standalone CIFAR-100 training, ablation & visualizer
 ├── results/
-│   ├── emergent_object_shadows.png         # Unsupervised figure-ground segmentation heatmaps
-│   └── subspace_elasticity_partitioning.png # 4-subspace attractor & elasticity analysis
+│   ├── emergent_object_shadows.png           # Unsupervised figure-ground segmentation heatmaps
+│   └── subspace_elasticity_partitioning.png   # 4-subspace attractor & elasticity analysis
 ├── README.md
 └── .gitignore
 ```
