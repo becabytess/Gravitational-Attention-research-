@@ -1,0 +1,26 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# PyTorch & Weights
+*.pt
+*.pth
+*.bin
+
+# Environments
+env/
+venv/
+.env
+.venv
+
+# Jupyter & IDEs
+.ipynb_checkpoints
+.vscode/
+.idea/
+
+# OS specific
+.DS_Store
+Thumbs.db
