@@ -1,9 +1,12 @@
+import os
 import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
+
+os.makedirs("results", exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Running on device: {device}")
