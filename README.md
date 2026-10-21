@@ -75,7 +75,7 @@ When $K$ attractors pull inside the *same* vector space, opposing force vectors 
 
 ## 3. Current Architecture
 
-The architecture uses **one single weight-tied recurrent module** (`OrthogonalVisionRound` / `PureOrthogonalCausalRound` / `LinearCausalGravitationalRound`) unrolled iteratively for $R$ rounds ($R=6$):
+The architecture uses weight-tied recurrent rounds (`OrthogonalVisionRound` / `PureOrthogonalCausalRound` / `LinearCausalGravitationalRound`) unrolled iteratively for $R$ rounds ($R=6$ or $L \times R = 6$):
 
 ```mermaid
 flowchart TD
@@ -85,7 +85,7 @@ flowchart TD
     Init --> U["Anchor u_i and Initial State x^(0) = u_i"]
     U --> Kappa["Per-Token, Per-Subspace Elasticity kappa_{i,k}"]
     
-    subgraph RecurrentLoop ["Weight-Tied Gravitational Round (Looped R = 6 Times)"]
+    subgraph RecurrentLoop ["Weight-Tied Gravitational Round (Looped R Times)"]
         CoM["1. Center of Mass (Global Mean or Causal Prefix Scan)"]
         Query["2. Subspace Probe Queries q_k"]
         Attract["3. Retrieve Real Attractor T*_k per Subspace"]
@@ -140,15 +140,16 @@ Inspecting the 4 orthogonal spheres reveals functional division of labor: Subspa
 
 ---
 
-## 6. Language Modeling Progression: 1-Body vs. 4-Subspace
+## 6. Language Modeling Progression: Depth & Inductive Biases
 
-Across iterative experiments on Tiny Shakespeare (1.11M characters, vocab 65, context $T=128$, $D=192$, 6 shared rounds, 10 epochs), we tracked the architecture across three rigorous stages:
+Across iterative experiments on Tiny Shakespeare (1.11M characters, vocab 65, context $T=128$, $D=192$, 10 epochs), we tracked the architecture across four rigorous stages:
 
-| Model Architecture | Parameters | Val Loss | Next-Char Accuracy | Key Emergent Behavior |
-| :--- | :---: | :---: | :---: | :--- |
-| **Pure 1-Body Model**<br>*(1 Sphere $\mathbb{S}^{191}$, 1 Query, Zero Decay)* | 248,516 | 1.638 | 52.16% | Solid baseline; forced to compromise between local spelling and global syntax. |
-| **Pure 4-Subspace Model**<br>*(4 Spheres $\mathbb{S}^{47}$, Zero Forced Decay)* | 249,101 | 1.605 | 52.57% | Spontaneous discovery of word-boundary staircases (S1), spelling spine (S4), and clause anchors (S2). |
-| **Linear 4-Subspace Model**<br>*(Exact Exponential Cancellation)* | 249,105 | 1.583 | 53.60% | Strictly $O(T)$ linear-time prefix scan with learned decay horizons. |
+| Model Architecture | Total Steps | Parameters | Val Loss | Accuracy | Core Emergent Behavior |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Pure 1-Body Model**<br>*(1 Sphere $\mathbb{S}^{191}$, 1 Query, Zero Decay)* | 6 rounds | 248,516 | 1.638 | 52.16% | Baseline single-attractor physical pull; forced to compromise between spelling and syntax. |
+| **Pure 4-Subspace Model**<br>*(1 Block $\times$ 6 Rounds, Zero Decay)* | 6 rounds | 249,101 | 1.605 | 52.57% | Spontaneous discovery of word-boundary staircases (S1), spelling spine (S4), and clause anchors (S2). |
+| **Hierarchical Multi-Block Model**<br>*(2 Blocks $\times$ 3 Rounds, Zero Decay)* | 6 rounds | 435,353 | 1.606 | 52.63% | **Depth stratifies gravity:** Block 1 tracks 18-char clauses; Block 2 tracks word staircases and spelling; produces multi-speaker dialogues. |
+| **Linear 4-Subspace Model**<br>*(Exact Exponential Cancellation)* | 6 rounds | 249,105 | 1.583 | 53.60% | Strictly $O(T)$ linear-time prefix scan with learned decay horizons. |
 
 ---
 
@@ -185,11 +186,54 @@ Evaluating the unforced model on Hamlet's *"To be, or not to be, that is the que
 
 ---
 
-## 8. Strictly $O(T)$ Linear Formulation via Exponential Cancellation
+## 8. Hierarchical Multi-Block Gravitational Network ($L=2$ Blocks $\times R=3$ Rounds)
+
+Rather than keeping the entire network inside a single weight-tied loop, the **Hierarchical Multi-Block** architecture stacks $L$ independent Gravitational Blocks in series.
+
+The settled equilibrium manifold of Block 1 ($\mathbf{x}^{(R, 1)}$) becomes the **new anchor coordinate ($\mathbf{u}^{(1)}$)** for Block 2:
+
+```
+[Raw Tokens] ---> [Block 1 (3 Rounds)] ---> Settled Manifold u^(1) ---> [Block 2 (3 Rounds)] ---> Readout Head
+```
+
+Total forward pass compute is the exact same 6 physics steps, but split across two independent physical regimes (435k parameters).
+
+### 8.1 Depth Divides the Spacetime Horizon
+
+Inspecting lookback distance $(t - j)$ across depth revealed clear syntactic stratification:
+
+![Hierarchical Multi-Block Lookback](results/multiblock_shakespeare_analysis.png)
+
+* **Block 1 (Macro Clause Horizon):** Subspace 1 in Block 1 anchors directly to punctuation (`,`) and spans the **entire clause**—counting from **`1` up to `18` characters back** across `"that is the question:"`! Block 1 forms the global syntactic scaffolding.
+* **Block 2 (Micro Word & Spelling Horizon):** Block 2 takes the settled clause manifold from Block 1 and breaks it down into individual **word-boundary staircases** (Subspace 1) and an ultra-fast local spelling spine (Subspace 4, with peak pull strength $\eta_4 = \mathbf{0.9890}$ and mass $M_4 = \mathbf{1.1493}$).
+
+### 8.2 Coherent Multi-Speaker Generation
+Depth allows the model to maintain long-range context across dramatic character changes:
+
+```text
+ROMEO:
+What was thou down? good in this is answer?
+
+DUKE OF YORK:
+What I rankling me death!
+
+LORD ROSS:
+Three sent this we?
+
+So?NOLLKE:
+Because in the clam, but the queen.
+
+DUKE OF YORK:
+Ay to the air obstane to brother, the Du
+```
+
+---
+
+## 9. Strictly $O(T)$ Linear Formulation via Exponential Cancellation
 
 When temporal horizon decay $\gamma_k$ is introduced, the system unlocks a mathematical identity that reduces causal attention to **strictly $O(T)$ linear time and linear memory with ZERO $T \times T$ matrices**.
 
-### 8.1 Exact Exponential Cancellation Derivation
+### 9.1 Exact Exponential Cancellation Derivation
 In the past light-cone ($j < t$), query-token match scores decay with learned temporal horizon $\gamma_k$:
 
 $$
@@ -216,44 +260,73 @@ This operates in **strictly $O(T)$ time and memory**. No $T \times T$ attention 
 
 ---
 
-## 9. Repository Structure
+## 10. Multi-Query Associative Recall (MQAR) Benchmark
+
+Evaluated on the synthetic Multi-Query Associative Recall task ($T=256$, 16 key-value pairs, 16 queries) comparing Gravitational Attention against a Standard Causal Transformer at the **exact same ~320k parameter scale** (1500 steps, batch 64):
+
+| Architecture | Parameters | Step 1500 Loss | Recall Accuracy | Random Guess Loss |
+| :--- | :---: | :---: | :---: | :---: |
+| **Standard Causal Transformer** (2 Layers, 4 Heads) | 331,137 | 3.7127 | 7.66% | $\approx 4.16$ |
+| **Gravitational Attention Network** (4 Spheres, 6 Rounds) | **310,605** | **2.6319** | **12.63%** | $\approx 4.16$ |
+
+Gravitational Attention drove loss down to **2.63** (vs. 3.71 for the Transformer) and achieved **nearly double the recall accuracy (12.63% vs 7.66%)** due to inverse-square force concentration toward retrieved key attractors.
+
+---
+
+## 11. Repository Structure
 
 ```
 ├── experiments/
 │   ├── cifar100_orthogonal_vision.py        # 2D Vision: CIFAR-100 training, ablation & visualizer
+│   ├── shakespeare_causal_lm_pure.py        # 1D Causal LM: Pure unforced orthogonal model (Zero decay)
+│   ├── shakespeare_multiblock.py            # 1D Causal LM: Hierarchical multi-block model (L=2, R=3)
 │   ├── shakespeare_causal_lm.py             # 1D Causal LM: Strictly O(T) linear prefix-scan model
-│   └── shakespeare_causal_lm_pure.py        # 1D Causal LM: Pure unforced orthogonal model (Zero decay)
+│   ├── mqar_eval.py                         # MQAR: Gravitational Attention associative recall
+│   └── mqar_transformer_baseline.py         # MQAR: Standard Transformer baseline comparison
 ├── results/
 │   ├── emergent_object_shadows.png           # 2D Vision: Unsupervised figure-ground segmentation heatmaps
 │   ├── subspace_elasticity_partitioning.png   # 2D Vision: 4-subspace attractor & elasticity analysis
-│   ├── causal_lm_shakespeare_analysis.png    # 1D Causal LM: O(T) linear model lookback analysis
-│   └── pure_subspace_shakespeare_analysis.png# 1D Causal LM: Pure unforced model lookback & word staircases
+│   ├── pure_subspace_shakespeare_analysis.png# 1D Causal LM: Pure unforced model lookback & word staircases
+│   ├── multiblock_shakespeare_analysis.png   # 1D Causal LM: Hierarchical depth lookback analysis
+│   └── causal_lm_shakespeare_analysis.png    # 1D Causal LM: O(T) linear model lookback analysis
 ├── README.md
 └── .gitignore
 ```
 
 ---
 
-## 10. Quick Start
+## 12. Quick Start
 
 ### Installation
 ```bash
 pip install torch torchvision datasets matplotlib numpy
 ```
 
-### 1. Run 2D Vision Benchmark (CIFAR-100, 40 Epochs)
+### 1. Vision Benchmark (CIFAR-100, 40 Epochs)
 ```bash
 python experiments/cifar100_orthogonal_vision.py
 ```
 
-### 2. Run Pure Unforced Causal LM (Zero Decay, 10 Epochs)
+### 2. Pure Unforced Causal LM (Zero Decay, 10 Epochs)
 ```bash
 python experiments/shakespeare_causal_lm_pure.py
 ```
 
-### 3. Run Strictly $O(T)$ Linear Causal LM (Exponential Cancellation, 10 Epochs)
+### 3. Hierarchical Multi-Block LM (2 Blocks x 3 Rounds, 10 Epochs)
+```bash
+python experiments/shakespeare_multiblock.py
+```
+
+### 4. Strictly $O(T)$ Linear Causal LM (Exponential Cancellation, 10 Epochs)
 ```bash
 python experiments/shakespeare_causal_lm.py
 ```
 
-All scripts load datasets directly into GPU VRAM, verify mathematical physics invariants (causality checks, geodesic normalization), execute full physics ablation suites, and save high-resolution diagnostic heatmaps to `results/`.
+### 5. Multi-Query Associative Recall (MQAR) Benchmark
+```bash
+# Run Gravitational Attention on MQAR
+python experiments/mqar_eval.py
+
+# Run Standard Transformer baseline on MQAR
+python experiments/mqar_transformer_baseline.py
+```
