@@ -75,7 +75,7 @@ When $K$ attractors pull inside the *same* vector space, opposing force vectors 
 
 ## 3. Current Architecture
 
-The architecture uses **one single weight-tied recurrent module** (`OrthogonalVisionRound` / `LinearCausalGravitationalRound`) unrolled iteratively for $R$ rounds ($R=6$):
+The architecture uses **one single weight-tied recurrent module** (`OrthogonalVisionRound` / `PureOrthogonalCausalRound` / `LinearCausalGravitationalRound`) unrolled iteratively for $R$ rounds ($R=6$):
 
 ```mermaid
 flowchart TD
@@ -140,13 +140,56 @@ Inspecting the 4 orthogonal spheres reveals functional division of labor: Subspa
 
 ---
 
-## 6. Strictly $O(T)$ Linear Causal Language Modeling (Tiny Shakespeare)
+## 6. Language Modeling Progression: 1-Body vs. 4-Subspace
 
-Standard causal self-attention scales quadratically as $O(T^2)$ in time and memory due to the lower-triangular causal attention matrix. 
+Across iterative experiments on Tiny Shakespeare (1.11M characters, vocab 65, context $T=128$, $D=192$, 6 shared rounds, 10 epochs), we tracked the architecture across three rigorous stages:
 
-Gravitational Attention achieves **strictly $O(T)$ linear-time autoregressive modeling with ZERO $T \times T$ matrices** via exact exponential cancellation.
+| Model Architecture | Parameters | Val Loss | Next-Char Accuracy | Key Emergent Behavior |
+| :--- | :---: | :---: | :---: | :--- |
+| **Pure 1-Body Model**<br>*(1 Sphere $\mathbb{S}^{191}$, 1 Query, Zero Decay)* | 248,516 | 1.638 | 52.16% | Solid baseline; forced to compromise between local spelling and global syntax. |
+| **Pure 4-Subspace Model**<br>*(4 Spheres $\mathbb{S}^{47}$, Zero Forced Decay)* | 249,101 | 1.605 | 52.57% | Spontaneous discovery of word-boundary staircases (S1), spelling spine (S4), and clause anchors (S2). |
+| **Linear 4-Subspace Model**<br>*(Exact Exponential Cancellation)* | 249,105 | 1.583 | 53.60% | Strictly $O(T)$ linear-time prefix scan with learned decay horizons. |
 
-### 6.1 Exact Exponential Cancellation Derivation
+---
+
+## 7. Pure Orthogonal Subspaces: Zero Forced Decay & Spontaneous Organization
+
+To test whether the architecture requires hand-crafted inductive biases or if the physics self-organizes from first principles, we completely removed all temporal decay ($\gamma = 0$) and initialized all 4 subspaces identically and uniformly.
+
+Every token was given a completely unconstrained attention horizon across the past light-cone ($j < t$).
+
+### 7.1 Spontaneous Linguistic Division of Labor
+Evaluating the unforced model on Hamlet's *"To be, or not to be, that is the question:"* revealed remarkable spontaneous specialization:
+
+![Pure 4-Subspace Analysis](results/pure_subspace_shakespeare_analysis.png)
+
+1. **Subspace 1 (Unsupervised Word-Boundary Staircases):**
+   Without any tokenizer or decay penalty, Subspace 1's lookback distance naturally counts characters inside each word, resetting at word onsets:
+   * `_ o r`: lookback counts **1 $\to$ 2 $\to$ 3**
+   * `_ n o t`: lookback counts **1 $\to$ 2 $\to$ 3 $\to$ 4**
+   * `_ t o`: lookback counts **1 $\to$ 2 $\to$ 3**
+   * `_ t h a t`: lookback counts **1 $\to$ 2 $\to$ 3 $\to$ 4 $\to$ 5**
+2. **Subspace 4 (Dominant Markovian Spelling Spine):**
+   Subspace 4 self-selected the strongest gravity in the network ($M_4 = 1.0589, \eta_4 = 0.8664$) and made its springs fluid ($\kappa \approx 0.1$). Its lookback distance locked into an unbroken stream of **`1`s and `2`s**, acting as the high-speed local spelling engine.
+3. **Subspace 2 (Rigid Grammatical & Clause Anchor):**
+   Subspace 2 assigned itself maximum spring stiffness ($\kappa \to 1.0$), making it completely rigid. It reached up to **22 characters back**, anchoring exclusively onto commas (`,`), spaces (`␣`), and clause boundaries to provide grammatical scaffolding.
+
+### 7.2 Physics Ablation (Pure 4-Subspace Model, Zero Decay)
+
+| Configuration | Val Loss | Next-Char Accuracy | Delta vs. Full | Physical Meaning |
+| :--- | :---: | :---: | :---: | :--- |
+| **Full Pure 4-Subspace Model** | **1.605** | **52.57%** | — | Unconstrained multi-body equilibrium |
+| **Constant Spring ($\kappa = 0.5$)** | **2.595** | **30.42%** | **-22.15%** | Fluid/stiff differentiation accounts for >22% accuracy |
+| **Gravity Disabled ($\eta = 0$)** | **4.829** | **10.95%** | **-41.62%** | Without gravitational attraction, tokens cannot interact |
+| **Springs Disabled ($\kappa = 0$)** | **6.615** | **7.31%** | **-45.25%** | Complete collapse into a gravitational singularity |
+
+---
+
+## 8. Strictly $O(T)$ Linear Formulation via Exponential Cancellation
+
+When temporal horizon decay $\gamma_k$ is introduced, the system unlocks a mathematical identity that reduces causal attention to **strictly $O(T)$ linear time and linear memory with ZERO $T \times T$ matrices**.
+
+### 8.1 Exact Exponential Cancellation Derivation
 In the past light-cone ($j < t$), query-token match scores decay with learned temporal horizon $\gamma_k$:
 
 $$
@@ -169,81 +212,48 @@ $$
 
 This operates in **strictly $O(T)$ time and memory**. No $T \times T$ attention matrix is ever materialized.
 
-### 6.2 Tiny Shakespeare Benchmark Results
-Trained on Tiny Shakespeare (1.11M characters, $T=128$, $D=192$, $K=4$ orthogonal $48$-D spheres, 6 shared rounds, 10 epochs):
-
-* **Parameters:** **249,105**
-* **Causality Verification:** Maximum future-to-past information leak ($t < 64$ from future tokens $t \ge 64$) = **$0.00\text{e}+00$**
-* **Validation Loss:** **1.583**
-* **Next-Character Accuracy:** **53.60%**
-
-#### Physics Ablation (Tiny Shakespeare Epoch 10)
-
-| Configuration | Val Loss | Next-Char Accuracy | Delta vs. Full |
-| :--- | :---: | :---: | :--- |
-| **Full $O(T)$ Orthogonal Model** | **1.583** | **53.60%** | — |
-| **Constant Spring ($\kappa = 0.5$)** | **2.335** | **33.38%** | **-20.22%** |
-| **Gravity Disabled ($\eta = 0$)** | **3.979** | **16.47%** | **-37.13%** |
-| **Springs Disabled ($\kappa = 0$)** | **7.534** | **4.32%** | **-49.29%** (Catastrophic collapse) |
-
-### 6.3 Emergent Linguistic Dynamics: Phonetic Backbones & Word Horizons
-Analyzing per-character elasticity $\kappa_{t, k}$ and spacetime lookback distance $(t - j)$ across Hamlet's *"To be, or not to be, that is the question:"* reveals functional hierarchy across the 4 orthogonal spheres:
-
 ![Causal LM Shakespeare Analysis](results/causal_lm_shakespeare_analysis.png)
-
-1. **Subspaces 3 & 4 ($\gamma = 4.23, 4.29$ — Markovian Phonetic Backbone):** Under steep decay, lookback distance is strictly locked at **1** (lookback of $t-1$) across every character, providing an unbroken Markovian chain for spelling.
-2. **Subspace 2 ($\gamma = 2.86$ — Digram Buffer):** Alternates between lookback 1 and 2 characters back, capturing immediate phonemes and vowel-consonant transitions.
-3. **Subspace 1 ($\gamma = 2.08$ — Multi-Character Morpheme Horizon):** Lowest temporal decay rate. Lookback expands to distances 2 and 3, tracking word progressions (`To␣` $\to$ 1, 2, 3; `or␣` $\to$ 1, 2, 3).
-4. **Punctuation & Boundary Pillars:** In Subspace 1, syntactic punctuation (`,` and `:`) and clause starts receive peak spring stiffness ($\kappa \to 1.0$), serving as fixed grammatical anchors.
-
-### 6.4 Sample Generation
-```text
-ROMEO:
-Wht, they no con?
-
-CAPlacior and?
-
-HER:
-Giard one. Is welld they should be hears
-Which I should not content of the man hers?
-And, be hither encounted to the touch'd mine.
-
-First ServinLeCUS:
-A beast what you can penter n
-```
 
 ---
 
-## 7. Repository Structure
+## 9. Repository Structure
 
 ```
 ├── experiments/
 │   ├── cifar100_orthogonal_vision.py        # 2D Vision: CIFAR-100 training, ablation & visualizer
-│   └── shakespeare_causal_lm.py             # 1D Causal LM: Strictly O(T) Shakespeare training & visualizer
+│   ├── shakespeare_causal_lm.py             # 1D Causal LM: Strictly O(T) linear prefix-scan model
+│   └── shakespeare_causal_lm_pure.py        # 1D Causal LM: Pure unforced orthogonal model (Zero decay)
 ├── results/
 │   ├── emergent_object_shadows.png           # 2D Vision: Unsupervised figure-ground segmentation heatmaps
 │   ├── subspace_elasticity_partitioning.png   # 2D Vision: 4-subspace attractor & elasticity analysis
-│   └── causal_lm_shakespeare_analysis.png    # 1D Causal LM: Lookback distance & elasticity analysis
+│   ├── causal_lm_shakespeare_analysis.png    # 1D Causal LM: O(T) linear model lookback analysis
+│   └── pure_subspace_shakespeare_analysis.png# 1D Causal LM: Pure unforced model lookback & word staircases
 ├── README.md
 └── .gitignore
 ```
 
 ---
 
-## 8. Quick Start
+## 10. Quick Start
 
 ### Installation
 ```bash
 pip install torch torchvision datasets matplotlib numpy
 ```
 
-### Reproduce Vision Benchmark (CIFAR-100, 40 Epochs)
+### 1. Run 2D Vision Benchmark (CIFAR-100, 40 Epochs)
 ```bash
 python experiments/cifar100_orthogonal_vision.py
 ```
 
-### Reproduce Causal LM Benchmark (Tiny Shakespeare, 10 Epochs)
+### 2. Run Pure Unforced Causal LM (Zero Decay, 10 Epochs)
+```bash
+python experiments/shakespeare_causal_lm_pure.py
+```
+
+### 3. Run Strictly $O(T)$ Linear Causal LM (Exponential Cancellation, 10 Epochs)
 ```bash
 python experiments/shakespeare_causal_lm.py
 ```
-Both scripts load datasets directly into GPU VRAM, verify mathematical physics invariants (causality checks, geodesic normalization), execute full physics ablation suites, and save high-resolution figures to `results/`.
+
+All scripts load datasets directly into GPU VRAM, verify mathematical physics invariants (causality checks, geodesic normalization), execute full physics ablation suites, and save high-resolution diagnostic heatmaps to `results/`.
