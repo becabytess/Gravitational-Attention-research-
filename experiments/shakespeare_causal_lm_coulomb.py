@@ -280,7 +280,7 @@ if __name__ == "__main__":
                 loss = F.cross_entropy(logits.view(-1, vocab_size), yb.view(-1))
             v_loss += loss.item()
             v_acc += logits.argmax(dim=-1).eq(yb).float().mean().item()
-        return v_loss / val_steps, 100.0 * (val_acc / val_steps)
+        return v_loss / val_steps, 100.0 * (v_acc / val_steps)
 
     full_loss, full_acc   = eval_ablation_lm()
     noe_loss, noe_acc     = eval_ablation_lm(eta_override=0.0)
