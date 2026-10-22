@@ -1,0 +1,117 @@
+{
+  "project": "Gravitational & Electrostatic Attention Networks",
+  "benchmarks": {
+    "cifar100_vision": {
+      "40_epochs_gravitational_4subspaces": {
+        "parameters": 351568,
+        "epochs": 40,
+        "subspaces": 4,
+        "top1_accuracy": 59.22,
+        "top5_accuracy": 85.32,
+        "val_loss": 1.557,
+        "ablations": {
+          "gravity_disabled_eta_0": 10.04,
+          "uniform_springs_kappa_0.5": 30.08,
+          "springs_disabled_kappa_0": 1.22
+        }
+      },
+      "20_epochs_head_to_head": {
+        "gravitational_baseline": {
+          "parameters": 351568,
+          "epochs": 20,
+          "subspaces": 4,
+          "top1_accuracy": 53.26,
+          "top5_accuracy": 81.99,
+          "val_loss": 1.774
+        },
+        "coulomb_electrostatic_winner": {
+          "parameters": 352340,
+          "epochs": 20,
+          "subspaces": 4,
+          "top1_accuracy": 54.31,
+          "top5_accuracy": 82.25,
+          "val_loss": 1.752,
+          "ablations": {
+            "electric_disabled_eta_0": 32.65,
+            "springs_disabled_kappa_0": 1.14
+          }
+        }
+      },
+      "10_epochs_rapid_tests": {
+        "electromagnetic_with_lorentz": {
+          "parameters": 361560,
+          "epochs": 10,
+          "subspaces": 4,
+          "top1_accuracy": 48.67,
+          "top5_accuracy": 78.03,
+          "val_loss": 2.019,
+          "ablations": {
+            "electric_off": 33.30,
+            "magnetic_off": 47.26,
+            "springs_off": 0.94,
+            "constant_spring": 37.62
+          }
+        },
+        "pure_electrostatic_single_space_1query": {
+          "parameters": 351176,
+          "epochs": 10,
+          "subspaces": 1,
+          "top1_accuracy": 48.09,
+          "top5_accuracy": 77.70,
+          "val_loss": 2.057,
+          "ablations": {
+            "electric_off": 44.99,
+            "springs_off": 1.00,
+            "constant_spring": 31.58
+          }
+        }
+      }
+    },
+    "tinyshakespeare_causal_lm": {
+      "10_epochs_head_to_head": {
+        "pure_gravitational_baseline": {
+          "parameters": 310605,
+          "epochs": 10,
+          "subspaces": 4,
+          "val_loss": 1.605,
+          "accuracy": 52.57
+        },
+        "causal_coulomb_winner": {
+          "parameters": 249873,
+          "epochs": 10,
+          "subspaces": 4,
+          "val_loss": 1.596,
+          "eval_val_loss": 1.600,
+          "accuracy": 52.86,
+          "eval_acc": 52.99,
+          "ablations": {
+            "electric_off_loss": 4.213,
+            "electric_off_acc": 12.64,
+            "springs_off_loss": 3.017,
+            "springs_off_acc": 29.68
+          }
+        }
+      },
+      "hierarchical_multiblock_2x3": {
+        "parameters": 435353,
+        "epochs": 10,
+        "val_loss": 1.606,
+        "accuracy": 52.59
+      }
+    },
+    "mqar_associative_recall_T256": {
+      "standard_transformer_baseline": {
+        "parameters": 331137,
+        "steps": 1500,
+        "loss": 3.7127,
+        "recall_accuracy": 7.66
+      },
+      "gravitational_attention": {
+        "parameters": 310605,
+        "steps": 1500,
+        "loss": 2.6319,
+        "recall_accuracy": 12.63
+      }
+    }
+  }
+}
