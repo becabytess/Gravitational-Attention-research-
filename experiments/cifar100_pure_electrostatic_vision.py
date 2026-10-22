@@ -50,17 +50,18 @@ def preprocess_gpu_batch(imgs_u8, is_train=True):
 
 
 # ==========================================
-# 2. PURE ELECTROSTATIC ROUND (NO SPRINGS, NO MAGNETIC, 1 SINGLE SPHERE)
+# 2. ELECTROSTATIC + HOOKE ROUND (SINGLE SPHERE S^191)
 # ==========================================
-class PureElectrostaticRound(nn.Module):
+class ElectrostaticHookeRound(nn.Module):
     """
-    Pure Electrostatic Dynamics on a Single Unit Hypersphere S^(D-1):
-      - Single 192-dimensional space (No subspaces)
+    Electrostatic + Hooke Elastic Field on 1 Single Hypersphere S^(D-1):
+      - 1 Single 192-dimensional space (No subspaces)
       - Zero magnetic field (B = 0, no velocity tracking)
-      - Zero Hooke springs (kappa = 0, no anchoring to initial position)
-      - Pure Coulomb Force:
+      - Coulomb Force (Signed charges q_i in [-1, 1]):
           q_i * Q > 0: Attracts toward central attractor T*
           q_i * Q < 0: Repels away from central attractor T*
+      - Hooke Spring Force:
+          F_spring = kappa * (u - x) anchors tokens back to initial patch u
     """
     def __init__(self, dim=192, temp=10.0, eps=0.1):
         super().__init__()
@@ -70,10 +71,6 @@ class PureElectrostaticRound(nn.Module):
 
         # Query generator for finding central attractor
         self.query_gen = nn.Linear(dim, dim)
-
-        # Predicts per-token signed electric charge q_i in (-1, 1)
-        self.charge_proj = nn.Linear(dim, 1)
-        self.charge_scale = 4.0
 
         # Central attractor charge Q (learnable scalar)
         self.attractor_charge = nn.Parameter(torch.tensor(1.0))
@@ -89,46 +86,48 @@ class PureElectrostaticRound(nn.Module):
             nn.Linear(dim * 2, dim)
         )
 
-    def forward(self, x, eta_override=None):
-        # x: (B, N, D) on S^(D-1)
+    def forward(self, x, u, kappa, charge, eta_override=None, kappa_override=None):
+        # x, u: (B, N, D) on S^(D-1)
+        # kappa: (B, N, 1) in (0, 1)
+        # charge: (B, N, 1) in (-1, 1)
         B, N, D = x.shape
 
         # 1. Global context probe
-        space_avg = F.normalize(x.mean(dim=1, keepdim=True), dim=-1) # (B, 1, D)
-        q = F.normalize(self.query_gen(space_avg), dim=-1)          # (B, 1, D)
+        space_avg = F.normalize(x.mean(dim=1, keepdim=True), dim=-1)
+        q = F.normalize(self.query_gen(space_avg), dim=-1)
 
         # 2. Search for central attractor T*
-        match_scores  = torch.matmul(q, x.transpose(-1, -2)) * self.temp # (B, 1, N)
+        match_scores  = torch.matmul(q, x.transpose(-1, -2)) * self.temp
         match_weights = F.softmax(match_scores, dim=-1)
-        t_star = F.normalize(torch.matmul(match_weights, x), dim=-1)      # (B, 1, D)
+        t_star = F.normalize(torch.matmul(match_weights, x), dim=-1)
         best_idx = match_scores.squeeze(1).argmax(dim=-1)
 
-        # 3. Predict per-token signed electric charge q_i in (-1, 1)
-        charge = torch.tanh(self.charge_scale * self.charge_proj(x))       # (B, N, 1)
-
-        # 4. Pure Coulomb Force
-        # dist_sq = ||t_star - x||^2 = 2 - 2 * cos(theta)
-        cos_sim = (x * t_star).sum(dim=-1, keepdim=True)                  # (B, N, 1)
+        # 3. Coulomb Force (Signed attraction or repulsion)
+        cos_sim = (x * t_star).sum(dim=-1, keepdim=True)
         dist_sq = (2.0 - 2.0 * cos_sim).clamp(min=0.0) + self.eps
         Q = self.attractor_charge
+        coulomb_coupling = (charge * Q) / dist_sq
+        force_coulomb = coulomb_coupling * (t_star - x)
 
-        coulomb_coupling = (charge * Q) / dist_sq                          # (B, N, 1)
-        force_coulomb = coulomb_coupling * (t_star - x)                    # (B, N, D)
+        # 4. Hooke's Law Spring Force
+        k_val = kappa if kappa_override is None else kappa_override
+        force_spring = k_val * (u - x)
 
-        # 5. Pure Physical Step (No springs, No magnetic)
+        # 5. Combined Physical Update (Coulomb + Hooke Springs)
         eta = self.eta_e if eta_override is None else eta_override
-        x_moved = F.normalize(x + eta * force_coulomb, dim=-1)
+        f_net = eta * force_coulomb + force_spring
+        x_moved = F.normalize(x + f_net, dim=-1)
 
         # 6. Residual Token Processing MLP
         x_out = F.normalize(x_moved + 0.25 * self.mlp(self.norm(x_moved)), dim=-1)
 
-        return x_out, charge.squeeze(-1), coulomb_coupling.squeeze(-1), best_idx
+        return x_out, coulomb_coupling.squeeze(-1), best_idx
 
 
 # ==========================================
-# 3. PURE ELECTROSTATIC VISION NETWORK
+# 3. ELECTROSTATIC VISION NETWORK (SINGLE SPHERE)
 # ==========================================
-class PureElectrostaticVisionNet(nn.Module):
+class ElectrostaticVisionNet(nn.Module):
     def __init__(self, num_classes=100, dim=192, default_rounds=6):
         super().__init__()
         self.dim = dim
@@ -143,11 +142,19 @@ class PureElectrostaticVisionNet(nn.Module):
         )
         self.pos_emb = nn.Parameter(torch.randn(1, 256, dim) * 0.02)
 
-        self.round = PureElectrostaticRound(dim=dim)
+        # Predicts per-token spring stiffness kappa in (0, 1)
+        self.kappa_proj = nn.Linear(dim, 1)
+        self.kappa_scale = 8.0
+
+        # Predicts per-token signed electric charge q_i in (-1, 1)
+        self.charge_proj = nn.Linear(dim, 1)
+        self.charge_scale = 4.0
+
+        self.round = ElectrostaticHookeRound(dim=dim)
         self.head_norm = nn.LayerNorm(dim * 2)
         self.classifier = nn.Linear(dim * 2, num_classes)
 
-    def forward(self, img, num_rounds=None, return_physics=False, eta_override=None):
+    def forward(self, img, num_rounds=None, return_physics=False, eta_override=None, kappa_override=None):
         if num_rounds is None:
             num_rounds = self.default_rounds
         B = img.size(0)
@@ -156,16 +163,22 @@ class PureElectrostaticVisionNet(nn.Module):
         u = F.normalize(raw, dim=-1) # (B, 256, 192) on S^191
         x = u.clone()
 
+        # Predict per-token stiffness kappa in (0, 1) and charge q_i in (-1, 1)
+        if kappa_override is None:
+            kappa = torch.sigmoid(self.kappa_scale * self.kappa_proj(raw))
+        else:
+            kappa = torch.full((B, 256, 1), kappa_override, device=img.device, dtype=u.dtype)
+
+        charge = torch.tanh(self.charge_scale * self.charge_proj(raw))
+
         trajectories = [x]
-        charge_maps = []
         coulomb_maps = []
         chosen_indices = []
 
         for _ in range(num_rounds):
-            x, charge, c_pull, best_idx = self.round(x, eta_override=eta_override)
+            x, c_pull, best_idx = self.round(x, u, kappa, charge, eta_override=eta_override, kappa_override=kappa_override)
             if return_physics:
                 trajectories.append(x)
-                charge_maps.append(charge)
                 coulomb_maps.append(c_pull)
                 chosen_indices.append(best_idx)
 
@@ -174,7 +187,7 @@ class PureElectrostaticVisionNet(nn.Module):
         logits = self.classifier(self.head_norm(torch.cat([com, peak], dim=-1)))
 
         if return_physics:
-            return logits, u, trajectories, charge_maps, coulomb_maps, chosen_indices
+            return logits, u, kappa.squeeze(-1), charge.squeeze(-1), trajectories, coulomb_maps, chosen_indices
         return logits
 
 
@@ -182,10 +195,10 @@ class PureElectrostaticVisionNet(nn.Module):
 # 4. TRAIN FOR 10 EPOCHS (FAST TEST SCHEDULE)
 # ==========================================
 if __name__ == "__main__":
-    model = PureElectrostaticVisionNet(num_classes=100, dim=192, default_rounds=6).to(device)
+    model = ElectrostaticVisionNet(num_classes=100, dim=192, default_rounds=6).to(device)
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"\nModel Parameters : {total_params:,} | Pure Electrostatic (Single Sphere S^191)")
-    print(f"Physics Config   : Coulomb Only (Zero Springs, Zero Magnetic, No Subspaces) | Epochs: 10\n")
+    print(f"\nModel Parameters : {total_params:,} | Electrostatic + Hooke (Single Sphere S^191)")
+    print(f"Physics Config   : Coulomb + Springs (Zero Magnetic, No Subspaces) | Epochs: 10\n")
 
     epochs = 10
     batch_size = 128
@@ -243,17 +256,17 @@ if __name__ == "__main__":
               f"Val Loss: {v_loss/(num_val/val_batch_size):.3f} | Top-1: {top1:.2f}% | Top-5: {top5:.2f}%")
 
     # ==========================================
-    # 5. PURE ELECTROSTATIC ABLATION AT EPOCH 10
+    # 5. PHYSICS ABLATIONS AT EPOCH 10
     # ==========================================
     @torch.no_grad()
-    def eval_ablation_cifar(eta_override=None):
+    def eval_ablation_cifar(eta_override=None, kappa_override=None):
         model.eval()
         c1, c5 = 0, 0
         for i in range(0, val_x_u8.size(0), 500):
             imgs = preprocess_gpu_batch(val_x_u8[i:i+500], is_train=False)
             labels = val_y[i:i+500]
             with torch.amp.autocast('cuda', enabled=(device == "cuda")):
-                logits = model(imgs, num_rounds=6, eta_override=eta_override)
+                logits = model(imgs, num_rounds=6, eta_override=eta_override, kappa_override=kappa_override)
             _, pred = logits.topk(5, dim=-1, largest=True, sorted=True)
             correct = pred.eq(labels.view(-1, 1).expand_as(pred))
             c1 += correct[:, :1].sum().item()
@@ -262,19 +275,23 @@ if __name__ == "__main__":
 
     full_t1, full_t5 = eval_ablation_cifar()
     noe_t1, _        = eval_ablation_cifar(eta_override=0.0)
+    nospr_t1, _      = eval_ablation_cifar(kappa_override=0.0)
+    flatspr_t1, _    = eval_ablation_cifar(kappa_override=0.5)
 
     q_attract = model.round.attractor_charge.item()
     eta_val   = model.round.eta_e.item()
 
-    print("\n=== EPOCH 10 PURE ELECTROSTATIC RESULTS ===")
+    print("\n=== EPOCH 10 SINGLE-SPHERE ELECTROSTATIC RESULTS ===")
     print(f"Attractor Charge Q : {q_attract:.4f}")
     print(f"Electric Step eta  : {eta_val:.4f}")
     print("-" * 60)
-    print(f"1. Full Pure Electrostatic Model  : {full_t1:.2f}% Top-1 ({full_t5:.2f}% Top-5)")
+    print(f"1. Full Model (Coulomb + Springs) : {full_t1:.2f}% Top-1 ({full_t5:.2f}% Top-5)")
     print(f"2. Electric Turned Off (eta = 0)  : {noe_t1:.2f}% Top-1 (Drop: -{full_t1 - noe_t1:.2f}%)")
+    print(f"3. Spring Turned Off (kappa = 0)  : {nospr_t1:.2f}% Top-1 (Drop: -{full_t1 - nospr_t1:.2f}%)")
+    print(f"4. Constant Spring (kappa = 0.5)  : {flatspr_t1:.2f}% Top-1 (Drop: -{full_t1 - flatspr_t1:.2f}%)")
 
     # ==========================================
-    # 6. DIAGNOSTIC VISUALIZATION (CHARGES & DISPLACEMENT)
+    # 6. DIAGNOSTIC VISUALIZATION
     # ==========================================
     model.eval()
     sample_u8 = val_x_u8[:4]
@@ -282,7 +299,7 @@ if __name__ == "__main__":
     sample_labels = val_y[:4]
 
     with torch.no_grad():
-        logits, u, trajs, c_maps, f_maps, best_idxs = model(sample_imgs, num_rounds=6, return_physics=True)
+        logits, u, kappa_maps, charge_maps, trajs, c_maps, best_idxs = model(sample_imgs, num_rounds=6, return_physics=True)
         probs = F.softmax(logits, dim=-1)
 
     fig, axes = plt.subplots(4, 4, figsize=(14, 12))
@@ -297,19 +314,19 @@ if __name__ == "__main__":
         axes[i, 0].set_title(pred_str, fontsize=9, fontweight='bold')
         axes[i, 0].axis("off")
 
-        # Col 1: Final Round Electric Charge q_i (Blue = Repel, Red = Attract)
-        q_img = c_maps[-1][i].view(16, 16).cpu().numpy()
+        # Col 1: Electric Charge q_i (Red = Attract, Blue = Repel)
+        q_img = charge_maps[i].view(16, 16).cpu().numpy()
         im_q = axes[i, 1].imshow(q_img, cmap="coolwarm", vmin=-1.0, vmax=1.0)
         axes[i, 1].set_title("Charge q_i\n[Red:Attract | Blue:Repel]", fontsize=9)
         axes[i, 1].axis("off")
         plt.colorbar(im_q, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
-        # Col 2: Net Coulomb Force Magnitude
-        force_mag = f_maps[-1][i].abs().view(16, 16).cpu().numpy()
-        im_f = axes[i, 2].imshow(force_mag, cmap="plasma")
-        axes[i, 2].set_title("Coulomb Coupling |q*Q|/d^2", fontsize=9)
+        # Col 2: Elasticity kappa (Stiffness)
+        k_img = kappa_maps[i].view(16, 16).cpu().numpy()
+        im_k = axes[i, 2].imshow(k_img, cmap="viridis", vmin=0.0, vmax=1.0)
+        axes[i, 2].set_title(f"Elasticity kappa\n[min:{k_img.min():.2f}, max:{k_img.max():.2f}]", fontsize=9)
         axes[i, 2].axis("off")
-        plt.colorbar(im_f, ax=axes[i, 2], fraction=0.046, pad=0.04)
+        plt.colorbar(im_k, ax=axes[i, 2], fraction=0.046, pad=0.04)
 
         # Col 3: Total Displacement Stretch from Initial Patch u
         stretch = (1.0 - (trajs[-1][i] * u[i]).sum(dim=-1)).view(16, 16).cpu().numpy()
@@ -318,8 +335,8 @@ if __name__ == "__main__":
         axes[i, 3].axis("off")
         plt.colorbar(im_s, ax=axes[i, 3], fraction=0.046, pad=0.04)
 
-    plt.suptitle("Pure Electrostatic Network (No Springs, No Magnetic, Single Sphere S^191)", fontsize=13, fontweight='bold', y=1.01)
+    plt.suptitle("Single-Sphere Electrostatic Network (Coulomb + Springs, S^191)", fontsize=13, fontweight='bold', y=1.01)
     plt.tight_layout()
-    plt.savefig("results/pure_electrostatic_cifar100_analysis.png", dpi=200, bbox_inches='tight')
-    print("Saved results/pure_electrostatic_cifar100_analysis.png")
+    plt.savefig("results/single_sphere_electrostatic_cifar100.png", dpi=200, bbox_inches='tight')
+    print("Saved results/single_sphere_electrostatic_cifar100.png")
     plt.show()
