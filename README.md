@@ -326,10 +326,88 @@ $$
 
 ---
 
-## 12. Repository Structure
+## 12. Multi-Centroid Dynamics & 2D Trajectory Convolutions
+
+Earlier architectures relied on a **single central attractor** $T_k^\ast$ per subspace. While effective for simple scenes, a single attractor introduces a fundamental physical bottleneck: **vector cancellation & compromise**. When multiple distinct entities exist in an image (e.g. a cat standing on a branch, or a lawnmower on grass) or in a sentence (vowels, consonants, syntax), pulling all tokens toward one vector forces the model to compromise on an uninformative centroid average.
+
+The **Multi-Centroid Trajectory Architecture** introduces three major physical breakthroughs:
+
+```
+                  ┌─────────────────────────────────────────────────────────┐
+                  │                 BIPARTITE FIELD DYNAMICS                │
+                  │                                                         │
+                  │   Phase A: GATHER (Tokens -> K Centroids)               │
+                  │   C_k = Softmax(scale * q_k · x^T + token_mass) · x     │
+                  │                                                         │
+                  │   Phase B: PULL (Tokens -> Closest Matching Centroid)   │
+                  │   drift_i = (C_assigned - x_i)                          │
+                  │                                                         │
+                  │   Phase C: RELAXATION VELOCITY STACK                    │
+                  │   traj = [Δx_1, Δx_2, ..., Δx_R]  ∈ R^(B x D x R x N)   │
+                  │   traj_features = Conv2d(traj) (Time x Space CNN)       │
+                  └─────────────────────────────────────────────────────────┘
+```
+
+### 12.1 Bipartite Routing ($K$ Dynamic Centroids per Subspace)
+Instead of all-to-all attention ($O(N^2)$), interaction is factorized through $K$ dynamic attractors per orthogonal subspace ($K=5$ in vision, $K=8$ in language):
+1. **Gather Phase:** Centroids query the token field. Informative tokens vote to form the $K$ centroid locations $\mathbf{C}_k \in \mathbb{S}^{d_g-1}$.
+2. **Pull Phase:** Tokens query the centroids. Each token is attracted toward its best-matching centroid attractor basin:
+   $$\mathbf{F}_{\text{pull}, i} = q_i \cdot (\mathbf{C}_{\text{assigned}, i} - \mathbf{x}_i)$$
+
+### 12.2 Learned `token_mass` as a Gravitational Saliency Gate
+In Newtonian gravity ($F = G \frac{M m}{r^2}$), massless particles ($m = 0$) cannot create gravitational wells. To prevent background clutter (sky, empty tables, masked blanks) from hijacking the centroids, each token predicts a scalar mass $m_i = \text{Linear}(\mathbf{x}_i) \in \mathbb{R}$:
+$$\text{Score}(k, i) = \text{scale} \cdot (\mathbf{q}_k \cdot \mathbf{x}_i) + \log \sigma(m_i)$$
+* **Foreground / Informative Tokens ($m_i \gg 0$):** $\sigma(m_i) \to 1.0 \implies \log \sigma(m_i) \to 0$. The token contributes at full gravitational strength.
+* **Background / Masked Tokens ($m_i \ll 0$):** $\sigma(m_i) \to 0.0 \implies \log \sigma(m_i) \to -\infty$. The token is completely stripped of mass and cannot form centroids.
+
+### 12.3 2D Trajectory CNN across `(Rounds, Tokens)`
+Standard models discard the path of optimization, evaluating only the final state $\mathbf{x}^{(R)}$. In contrast, the Trajectory CNN stacks all $R$ intermediate velocity transitions:
+$$\mathbf{T} = \left[ \Delta \mathbf{x}^{(1)}, \Delta \mathbf{x}^{(2)}, \dots, \Delta \mathbf{x}^{(R)} \right] \in \mathbb{R}^{B \times D \times R \times N}$$
+A 2D depthwise convolution over `(Time/Rounds, Space/Tokens)` integrates the particle's full velocity, acceleration, and momentum history, allowing the classifier to read *how* particles moved into equilibrium.
+
+### 12.4 Emergent Unsupervised Object Segmentation (CIFAR-100)
+Trained for just **10 epochs** on CIFAR-100 (371k parameters, $K=5$ centroids, $G=4$ spheres), the architecture reached **50.59% Top-1 / 79.95% Top-5** and spontaneously produced crisp multi-subspace object segmentations:
+
+![Multi-Subspace Object Decomposition](results/centroid_trajectory_segmentation.png)
+
+* **Leopard on Tree (Row 4):** Head 1 and Head 3 collapse the pitch-black night into a single uniform gray cluster while carving out the leopard's head, body, and legs into distinct centroid parts. Head 2 Mass illuminates the cat as a bright teal silhouette against zero-mass background night.
+* **Lawnmower (Row 2):** Head 1 separates the upper driver and sky from the lower chassis. Head 2 cleanly segments green lawn from the orange mower body. Head 3 decomposes micro-parts (wheels vs. chassis vs. grass).
+
+---
+
+## 13. Bidirectional Physical Relaxation & Masked Language Modeling
+
+Masked Language Modeling (BERT-style 15% masking) previously failed in single-attractor physical networks, plateauing at ~15% accuracy. The Centroid-Trajectory framework resolves this by establishing **physical boundary conditions**:
+
+### 13.1 Physical Boundary Conditions via Hooke Springs
+* **Known Context Tokens ($i \notin \text{mask}$):** Assigned stiff spring constants ($\kappa = 0.85$). They act as rigid anchor particles that generate the gravitational field.
+* **Masked Blank Tokens ($i \in \text{mask}$):** Assigned **zero spring resistance ($\kappa = 0.0$)**. They have zero tether to their initial dummy coordinate and are completely free to migrate along force vectors toward the semantic energy minimum.
+* **Zero Mass on Blanks:** `token_mass` assigns large negative priors ($-\infty$) to masked positions, preventing blank slots from corrupting centroid queries.
+
+### 13.2 Kinetic Relaxation & Saliency Telemetry (Tiny Shakespeare)
+
+![Physical Relaxation & Saliency Telemetry](results/language_physics_mlm.png)
+
+1. **Kinetic Velocity Profile (Panel 1):** Known anchor tokens (navy dashed line) start at 0.35 and instantly freeze down to $< 0.02$ by Round 5–6 due to Hooke anchoring. Masked tokens (crimson line) maintain high mobility to explore context, then smoothly decelerate from 0.23 to 0.11 as they settle into their optimal attractor basin.
+2. **Subspace Partitions (Panel 2):** The 8 centroids automatically separate speaker labels (`R O M E O : \n`), punctuation, vowels, and consonants.
+3. **Learned Token Mass Prior (Panel 3):** Masked positions are **pitch black (0.0 mass)** across all 4 heads, while key words (`ROMEO`, `lady`, `enrich`, `hand`) light up in yellow/green ($0.8 - 1.0$) as structural gravitational anchors.
+
+### 13.3 Results: From 14.9% to 60.04% in 3.5 Minutes
+Trained on Tiny Shakespeare (263k parameters, $G=4$ spheres, $K=8$ centroids, $R=6$ rounds) for 10 epochs:
+* **Validation Masked Token Accuracy:** **60.04%** (Val Loss: **1.330**)
+* **Interactive Infilling Recovery (100% on classic quotes):**
+  * `Wh[?]t lady is th[?]t` $\to$ **`'a'` (98.1%)** & **`'a'` (96.4%)** $\to$ *"What lady is that"*
+  * `O Rom[?]o, Romeo! wheref[?]re` $\to$ **`'e'` (69.8%)** & **`'o'` (88.0%)** $\to$ *"O Romeo, Romeo! wherefore"*
+  * `To b[?], or not to be, th[?]t` $\to$ **`'e'` (76.5%)** & **`'a'` (99.7%)** $\to$ *"To be, or not to be, that"*
+
+---
+
+## 14. Repository Structure
 
 ```
 ├── experiments/
+│   ├── cifar100_centroid_trajectory.py      # 2D Vision: Centroid-Trajectory + Token Mass (50.59% at Epoch 10)
+│   ├── shakespeare_centroid_trajectory_mlm.py # 1D MLM: Physical Relaxation BERT MLM (60.04% Acc, 1.330 Loss)
 │   ├── cifar100_coulomb_subspaces.py        # 2D Vision: 20-epoch 4-subspace Coulomb benchmark (+1.05% over Gravity)
 │   ├── shakespeare_causal_lm_coulomb.py     # 1D Causal LM: 10-epoch Causal Coulomb LM (1.596 Loss, 52.99% Acc)
 │   ├── cifar100_pure_electrostatic_vision.py# 2D Vision: Single-sphere Coulomb + Hooke vision network
@@ -340,6 +418,8 @@ $$
 │   ├── mqar_eval.py                         # MQAR: Gravitational Attention associative recall
 │   └── mqar_transformer_baseline.py         # MQAR: Standard Transformer baseline comparison
 ├── results/
+│   ├── centroid_trajectory_segmentation.png  # 2D Vision: 4-subspace multi-centroid unsupervised part segmentation
+│   ├── language_physics_mlm.png              # 1D MLM: Kinetic deceleration, subspace centroids, and mass heatmaps
 │   ├── electromagnetic_cifar100_analysis.png # 2D Vision: Coulomb dipole & Lorentz deflection heatmaps
 │   ├── emergent_object_shadows.png           # 2D Vision: Unsupervised figure-ground segmentation heatmaps
 │   ├── subspace_elasticity_partitioning.png   # 2D Vision: 4-subspace attractor & elasticity analysis
@@ -352,43 +432,35 @@ $$
 
 ---
 
-## 13. Quick Start
+## 15. Quick Start
 
 ### Installation
 ```bash
 pip install torch torchvision datasets matplotlib numpy
 ```
 
-### 1. Causal Coulomb Language Model (Tiny Shakespeare, 10 Epochs)
+### 1. Centroid-Trajectory Vision Benchmark (CIFAR-100, 10 Epochs)
+```bash
+python experiments/cifar100_centroid_trajectory.py
+```
+
+### 2. Centroid-Trajectory Masked Language Model (Tiny Shakespeare, 10 Epochs)
+```bash
+python experiments/shakespeare_centroid_trajectory_mlm.py
+```
+
+### 3. Causal Coulomb Language Model (Tiny Shakespeare, 10 Epochs)
 ```bash
 python experiments/shakespeare_causal_lm_coulomb.py
 ```
 
-### 2. Orthogonal Coulomb Vision Benchmark (CIFAR-100, 20 Epochs)
+### 4. Orthogonal Coulomb Vision Benchmark (CIFAR-100, 20 Epochs)
 ```bash
 python experiments/cifar100_coulomb_subspaces.py
 ```
 
-### 3. Original Gravitational Vision Benchmark (CIFAR-100, 40 Epochs)
+### 5. Multi-Query Associative Recall (MQAR) Benchmark
 ```bash
-python experiments/cifar100_orthogonal_vision.py
-```
-
-### 4. Pure Unforced Causal Gravitational LM (Zero Decay, 10 Epochs)
-```bash
-python experiments/shakespeare_causal_lm_pure.py
-```
-
-### 5. Hierarchical Multi-Block LM (2 Blocks x 3 Rounds, 10 Epochs)
-```bash
-python experiments/shakespeare_multiblock.py
-```
-
-### 6. Multi-Query Associative Recall (MQAR) Benchmark
-```bash
-# Run Gravitational Attention on MQAR
 python experiments/mqar_eval.py
-
-# Run Standard Transformer baseline on MQAR
 python experiments/mqar_transformer_baseline.py
 ```

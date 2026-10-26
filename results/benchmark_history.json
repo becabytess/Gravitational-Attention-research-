@@ -99,6 +99,40 @@
         "accuracy": 52.59
       }
     },
+    "tinyshakespeare_masked_lm": {
+      "10_epochs_centroid_trajectory_bert": {
+        "parameters": 263505,
+        "epochs": 10,
+        "subspaces": 4,
+        "centroids_per_subspace": 8,
+        "rounds": 6,
+        "masked_token_accuracy": 60.04,
+        "val_loss": 1.330,
+        "innovations": [
+          "Physical boundary conditions (kappa=0.0 free vs kappa=0.85 anchor)",
+          "Learned Token Mass suppresses masked positions",
+          "K=8 centroids per subspace for phonetic/syntactic decomposition",
+          "2D Trajectory CNN velocity integration"
+        ]
+      }
+    },
+    "cifar100_centroid_trajectory": {
+      "10_epochs_centroid_trajectory": {
+        "parameters": 371784,
+        "epochs": 10,
+        "subspaces": 4,
+        "centroids_per_subspace": 5,
+        "rounds": 6,
+        "top1_accuracy": 50.59,
+        "top5_accuracy": 79.95,
+        "val_loss": 1.912,
+        "innovations": [
+          "Bipartite Gather vs. Pull Multi-Centroids (K=5)",
+          "2D Trajectory CNN over (Rounds, Tokens)",
+          "Learned Token Mass Gravitational Saliency Gate"
+        ]
+      }
+    },
     "mqar_associative_recall_T256": {
       "standard_transformer_baseline": {
         "parameters": 331137,
