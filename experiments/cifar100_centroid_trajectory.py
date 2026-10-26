@@ -78,6 +78,11 @@ class PureCentroidTrajectoryBlock(nn.Module):
         self.scale = nn.Parameter(torch.ones(1, self.G, 1, 1) * 8.0)
         self.eta_e = nn.Parameter(torch.full((self.G,), 0.40))
         
+        # Learned token mass (gravitational saliency gate): projects token state to group mass priors
+        self.token_mass = nn.Linear(dim, self.G)
+        nn.init.zeros_(self.token_mass.weight)
+        nn.init.constant_(self.token_mass.bias, 1.5) # start with high mass (~0.82) so all tokens contribute initially
+        
         # Trajectory CNN across (Rounds, Tokens)
         # Depthwise 2D convs keep parameters strictly fair (~5k params)
         self.traj_cnn = nn.Sequential(
@@ -102,6 +107,7 @@ class PureCentroidTrajectoryBlock(nn.Module):
         
         transitions = []
         cluster_maps = []
+        mass_maps = []
         
         for r in range(R):
             # 1. Subspace group mean modulates the K=5 centroid queries
@@ -109,22 +115,28 @@ class PureCentroidTrajectoryBlock(nn.Module):
             q_mod = self.query_mod(group_mean).view(B, G, K, d_g)
             q = F.normalize(self.query_base + q_mod, dim=-1) # (B, G, K, d_g)
             
-            # 2. Gather N tokens into K=5 centroids on S^(d_g-1)
+            # 2. Compute Learned Token Mass prior (gravitational saliency gate)
+            x_flat_r = x.permute(0, 2, 1, 3).reshape(B, N, self.dim)
+            mass_logits = self.token_mass(x_flat_r) # (B, N, G)
+            mass = F.logsigmoid(mass_logits).permute(0, 2, 1).unsqueeze(2) # (B, G, 1, N)
+            
+            # 3. Gather N tokens into K=5 centroids on S^(d_g-1) with mass weighting
             scale = torch.clamp(self.scale, min=1.0, max=25.0)
-            gather_scores = scale * torch.matmul(q, x.transpose(-1, -2)) # (B, G, K, N)
+            gather_scores = scale * torch.matmul(q, x.transpose(-1, -2)) + mass # (B, G, K, N)
             centroid_weights = F.softmax(gather_scores, dim=-1)
             centroids = F.normalize(torch.matmul(centroid_weights, x), dim=-1) # (B, G, K, d_g)
             
-            # 3. Pull tokens toward their closest matching centroid
+            # 4. Pull tokens toward their closest matching centroid
             pull_scores = scale * torch.matmul(x, q.transpose(-1, -2)) # (B, G, N, K)
             pull_weights = F.softmax(pull_scores, dim=-1)
             
             if return_physics:
                 cluster_maps.append(pull_weights.argmax(dim=-1)) # (B, G, N)
+                mass_maps.append(torch.sigmoid(mass_logits).permute(0, 2, 1)) # (B, G, N)
                 
             assigned_centroid = torch.matmul(pull_weights, centroids) # (B, G, N, d_g)
             
-            # 4. Coulomb Force + Hooke Spring Force
+            # 5. Coulomb Force + Hooke Spring Force
             # Coulomb pull toward centroid modulated by signed charge
             force_coulomb = charge * (assigned_centroid - x)
             force_spring  = kappa * (u - x)
@@ -138,18 +150,18 @@ class PureCentroidTrajectoryBlock(nn.Module):
             transitions.append(delta_flat)
             x = x_moved
             
-        # 5. Trajectory CNN across velocity path: (B, D, R, N)
+        # 6. Trajectory CNN across velocity path: (B, D, R, N)
         traj = torch.stack(transitions, dim=2).permute(0, 3, 2, 1).contiguous()
         traj_features = self.traj_cnn(traj).squeeze(2).transpose(1, 2) # (B, N, D)
         
-        # 6. Cross-subspace residual MLP mixing
+        # 7. Cross-subspace residual MLP mixing
         x_flat = x.permute(0, 2, 1, 3).reshape(B, N, self.dim)
         x_out_flat = x_flat + self.traj_proj(traj_features)
         x_mlp = x_out_flat + 0.25 * self.mlp(self.norm(x_out_flat))
         x_out = F.normalize(x_mlp.view(B, N, G, d_g).permute(0, 2, 1, 3), dim=-1)
         
         if return_physics:
-            return x_out, transitions, cluster_maps
+            return x_out, transitions, cluster_maps, mass_maps
         return x_out
 
 
@@ -188,7 +200,7 @@ class CentroidTrajectoryVisionNet(nn.Module):
         charge = torch.tanh(4.0 * self.charge_proj(raw_flat)).permute(0, 2, 1).unsqueeze(-1)
         
         if return_physics:
-            x_final, trans, clusters = self.block(x, u, kappa, charge, return_physics=True)
+            x_final, trans, clusters, masses = self.block(x, u, kappa, charge, return_physics=True)
         else:
             x_final = self.block(x, u, kappa, charge, return_physics=False)
             
@@ -198,7 +210,7 @@ class CentroidTrajectoryVisionNet(nn.Module):
         logits = self.classifier(self.head_norm(torch.cat([com, peak], dim=-1)))
         
         if return_physics:
-            return logits, trans, clusters
+            return logits, trans, clusters, masses
         return logits
 
 
@@ -208,7 +220,7 @@ class CentroidTrajectoryVisionNet(nn.Module):
 if __name__ == "__main__":
     model = CentroidTrajectoryVisionNet(num_classes=100, dim=192, num_groups=4, num_centroids=5, num_rounds=6).to(device)
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"\nModel Parameters : {total_params:,} | Centroid-Trajectory Hybrid (4 Spheres S^47, K=5 Centroids)")
+    print(f"\nModel Parameters : {total_params:,} | Centroid-Trajectory + Learned Token Mass (4 Spheres S^47, K=5 Centroids)")
     print(f"Benchmark Target : Beat Baseline at Epoch 10 | Fast 10-Epoch Run (~2.5 mins)\n")
 
     epochs = 10
@@ -307,11 +319,11 @@ if __name__ == "__main__":
     sample_labels = val_y[:num_samples]
 
     with torch.no_grad():
-        logits, transitions, cluster_maps = model(sample_imgs, return_physics=True)
+        logits, transitions, cluster_maps, mass_maps = model(sample_imgs, return_physics=True)
         preds = logits.argmax(dim=-1)
 
-    # Setup 9-column figure matching the Gemini App inspection
-    fig, axes = plt.subplots(num_samples, 9, figsize=(22, 3.0 * num_samples))
+    # Setup 10-column figure matching the Gemini App inspection
+    fig, axes = plt.subplots(num_samples, 10, figsize=(24, 3.0 * num_samples))
     plt.subplots_adjust(wspace=0.3, hspace=0.35)
 
     for i in range(num_samples):
@@ -340,14 +352,21 @@ if __name__ == "__main__":
             axes[i, 2 + r].set_title(f"Round {r+1}\nShift", fontsize=8)
             axes[i, 2 + r].axis("off")
 
-        # Col 8: Centroid Cluster Map (Final Round, Group 0, K=5 attractors)
-        # cluster_maps[-1] has shape (B, G, N)
-        cluster_map = cluster_maps[-1][i, 0].view(16, 16).cpu().numpy()
-        axes[i, 8].imshow(cluster_map, cmap="tab10", vmin=0, vmax=4)
-        axes[i, 8].set_title("Centroid Clusters\n(Group 0, K=5)", fontsize=9, fontweight='bold')
+        # Col 8: Learned Token Mass Map (Final Round, Group 0, Gravitational Saliency)
+        # mass_maps[-1] has shape (B, G, N)
+        mass_map = mass_maps[-1][i, 0].view(16, 16).cpu().numpy()
+        axes[i, 8].imshow(mass_map, cmap="viridis", vmin=0, vmax=1)
+        axes[i, 8].set_title("Token Mass\n(Saliency Gate)", fontsize=9, fontweight='bold')
         axes[i, 8].axis("off")
 
-    plt.suptitle("Centroid-Trajectory Coulomb Network (4 Spheres S^47, K=5 Centroids, 6 Rounds, 10 Epochs)", fontsize=13, fontweight='bold', y=0.99)
+        # Col 9: Centroid Cluster Map (Final Round, Group 0, K=5 attractors)
+        # cluster_maps[-1] has shape (B, G, N)
+        cluster_map = cluster_maps[-1][i, 0].view(16, 16).cpu().numpy()
+        axes[i, 9].imshow(cluster_map, cmap="tab10", vmin=0, vmax=4)
+        axes[i, 9].set_title("Centroid Clusters\n(Group 0, K=5)", fontsize=9, fontweight='bold')
+        axes[i, 9].axis("off")
+
+    plt.suptitle("Centroid-Trajectory Network WITH Learned Token Mass (4 Spheres S^47, K=5 Centroids, 6 Rounds, 10 Epochs)", fontsize=13, fontweight='bold', y=0.99)
     plt.tight_layout()
     plot_path = "results/centroid_trajectory_cifar100_10epochs.png"
     plt.savefig(plot_path, dpi=200, bbox_inches='tight')
