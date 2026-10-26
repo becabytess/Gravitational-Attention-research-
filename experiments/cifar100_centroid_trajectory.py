@@ -322,9 +322,10 @@ if __name__ == "__main__":
         logits, transitions, cluster_maps, mass_maps = model(sample_imgs, return_physics=True)
         preds = logits.argmax(dim=-1)
 
-    # Setup 10-column figure matching the Gemini App inspection
-    fig, axes = plt.subplots(num_samples, 10, figsize=(24, 3.0 * num_samples))
-    plt.subplots_adjust(wspace=0.3, hspace=0.35)
+    # Setup 10-column figure matching the Gemini App inspection:
+    # Col 0: Image | Col 1: Attn Focus | Cols 2-5: All 4 Groups Clusters | Cols 6-9: All 4 Groups Token Mass
+    fig, axes = plt.subplots(num_samples, 10, figsize=(22, 2.8 * num_samples))
+    plt.subplots_adjust(wspace=0.35, hspace=0.35)
 
     for i in range(num_samples):
         orig_img = sample_u8[i].cpu().permute(1, 2, 0).numpy() / 255.0
@@ -334,39 +335,33 @@ if __name__ == "__main__":
 
         # Col 0: Original Image
         axes[i, 0].imshow(orig_img)
-        axes[i, 0].set_title(f"True: {true_cls}\nPred: {pred_cls}", color=title_color, fontsize=9, fontweight='bold')
+        axes[i, 0].set_title(f"True: {true_cls}\nPred: {pred_cls}", color=title_color, fontsize=8, fontweight='bold')
         axes[i, 0].axis("off")
 
         # Col 1: Total Trajectory Focus (Cumulative velocity drift across all 6 rounds)
-        # transitions is list of 6 tensors of shape (B, N, D)
         total_drift = sum(trans[i].norm(dim=-1) for trans in transitions).view(16, 16).cpu().numpy()
         axes[i, 1].imshow(orig_img)
         axes[i, 1].imshow(total_drift, cmap="inferno", alpha=0.55, interpolation="bicubic", extent=[0, 32, 32, 0])
-        axes[i, 1].set_title("Total Trajectory\n(Attn Focus)", fontsize=9, fontweight='bold')
+        axes[i, 1].set_title("Total Trajectory\n(Attn Focus)", fontsize=8, fontweight='bold')
         axes[i, 1].axis("off")
 
-        # Cols 2 to 7: Per-Round Velocity Shifts (Round 1 to 6)
-        for r in range(6):
-            r_shift = transitions[r][i].norm(dim=-1).view(16, 16).cpu().numpy()
-            axes[i, 2 + r].imshow(r_shift, cmap="magma")
-            axes[i, 2 + r].set_title(f"Round {r+1}\nShift", fontsize=8)
-            axes[i, 2 + r].axis("off")
-
-        # Col 8: Learned Token Mass Map (Final Round, Group 0, Gravitational Saliency)
-        # mass_maps[-1] has shape (B, G, N)
-        mass_map = mass_maps[-1][i, 0].view(16, 16).cpu().numpy()
-        axes[i, 8].imshow(mass_map, cmap="viridis", vmin=0, vmax=1)
-        axes[i, 8].set_title("Token Mass\n(Saliency Gate)", fontsize=9, fontweight='bold')
-        axes[i, 8].axis("off")
-
-        # Col 9: Centroid Cluster Map (Final Round, Group 0, K=5 attractors)
+        # Cols 2 to 5: Centroid Clusters across all 4 Subspace Groups (Round 6)
         # cluster_maps[-1] has shape (B, G, N)
-        cluster_map = cluster_maps[-1][i, 0].view(16, 16).cpu().numpy()
-        axes[i, 9].imshow(cluster_map, cmap="tab10", vmin=0, vmax=4)
-        axes[i, 9].set_title("Centroid Clusters\n(Group 0, K=5)", fontsize=9, fontweight='bold')
-        axes[i, 9].axis("off")
+        for g in range(4):
+            c_map = cluster_maps[-1][i, g].view(16, 16).cpu().numpy()
+            axes[i, 2 + g].imshow(c_map, cmap="tab10", vmin=0, vmax=4)
+            axes[i, 2 + g].set_title(f"G{g} Clusters\n(Subspace {g+1})", fontsize=8, fontweight='bold')
+            axes[i, 2 + g].axis("off")
 
-    plt.suptitle("Centroid-Trajectory Network WITH Learned Token Mass (4 Spheres S^47, K=5 Centroids, 6 Rounds, 10 Epochs)", fontsize=13, fontweight='bold', y=0.99)
+        # Cols 6 to 9: Learned Token Mass (Saliency Gate) across all 4 Subspace Groups
+        # mass_maps[-1] has shape (B, G, N)
+        for g in range(4):
+            m_map = mass_maps[-1][i, g].view(16, 16).cpu().numpy()
+            axes[i, 6 + g].imshow(m_map, cmap="viridis", vmin=0, vmax=1)
+            axes[i, 6 + g].set_title(f"G{g} Mass\n(Saliency {g+1})", fontsize=8, fontweight='bold')
+            axes[i, 6 + g].axis("off")
+
+    plt.suptitle("Centroid-Trajectory Network: 4-Subspace Part Segmentations & Learned Token Mass", fontsize=12, fontweight='bold', y=0.99)
     plt.tight_layout()
     plot_path = "results/centroid_trajectory_cifar100_10epochs.png"
     plt.savefig(plot_path, dpi=200, bbox_inches='tight')
